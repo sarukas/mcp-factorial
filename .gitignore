@@ -31,7 +31,6 @@ Thumbs.db
 # Claude files (keep it minimal!)
 .claude/
 CLAUDE.md
-DOCUMENT_DOWNLOAD_INVESTIGATION.md
 
 # Test coverage
 coverage/
@@ -48,4 +47,4 @@ temp/
 
 # MCP Registry tokens
 .mcpregistry_*
-/feedback
+/feedback/*
