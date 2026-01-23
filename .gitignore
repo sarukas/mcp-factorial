@@ -48,3 +48,4 @@ temp/
 
 # MCP Registry tokens
 .mcpregistry_*
+/feedback
