@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.github
+.vscode
+.husky
+.env
+.env.*
+coverage
+.vitest
+*.md
+!README.md
+assets
+SECURITY-ASSESSMENT.md
