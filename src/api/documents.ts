@@ -148,27 +148,35 @@ interface DownloadUrlResponse {
 export async function getDocumentDownloadUrls(
   documentIds: number[]
 ): Promise<DownloadUrlResponse[]> {
-  // Check if OAuth2 is configured - required for downloads
-  if (!isOAuth2Configured()) {
-    throw new Error(
-      'Document download requires OAuth2 authentication.\n\n' +
-        'The Factorial API does not support document downloads with API key authentication.\n' +
-        'This is a Factorial API limitation, not an MCP server limitation.\n\n' +
-        'To enable document downloads:\n' +
-        '  1. Go to https://api.factorialhr.com/oauth/applications\n' +
-        '  2. Create an OAuth2 application\n' +
-        '  3. Complete the authorization flow to get a refresh token\n' +
-        '  4. Set environment variables:\n' +
-        '     - FACTORIAL_OAUTH_CLIENT_ID\n' +
-        '     - FACTORIAL_OAUTH_CLIENT_SECRET\n' +
-        '     - FACTORIAL_OAUTH_REFRESH_TOKEN\n\n' +
-        'See the README for detailed OAuth2 setup instructions.\n\n' +
-        `Document IDs requested: ${documentIds.join(', ')}`
-    );
-  }
+  // Determine the access token: prefer per-user Bearer credential from
+  // AsyncLocalStorage context, fall back to the shared OAuth2 refresh flow.
+  let accessToken: string | undefined;
 
-  // Get OAuth2 access token
-  const accessToken = await getOAuth2AccessToken();
+  const { getCurrentCredentials } = await import('../credentials.js');
+  const creds = getCurrentCredentials();
+  if (creds?.mode === 'bearer') {
+    accessToken = creds.accessToken;
+  } else {
+    // Shared-key mode — need separate OAuth2 config for downloads
+    if (!isOAuth2Configured()) {
+      throw new Error(
+        'Document download requires OAuth2 authentication.\n\n' +
+          'The Factorial API does not support document downloads with API key authentication.\n' +
+          'This is a Factorial API limitation, not an MCP server limitation.\n\n' +
+          'To enable document downloads:\n' +
+          '  1. Go to https://api.factorialhr.com/oauth/applications\n' +
+          '  2. Create an OAuth2 application\n' +
+          '  3. Complete the authorization flow to get a refresh token\n' +
+          '  4. Set environment variables:\n' +
+          '     - FACTORIAL_OAUTH_CLIENT_ID\n' +
+          '     - FACTORIAL_OAUTH_CLIENT_SECRET\n' +
+          '     - FACTORIAL_OAUTH_REFRESH_TOKEN\n\n' +
+          'See the README for detailed OAuth2 setup instructions.\n\n' +
+          `Document IDs requested: ${documentIds.join(', ')}`
+      );
+    }
+    accessToken = await getOAuth2AccessToken();
+  }
 
   // The download-urls endpoint uses API version 2025-01-01
   const downloadUrlsEndpoint =

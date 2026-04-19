@@ -13,6 +13,7 @@ import {
   listFamilySituations,
   getFamilySituation,
 } from '../api/index.js';
+import { credentialsFromAuthInfo, withCredentials } from '../credentials.js';
 
 export function registerPayrollTool(server: McpServer) {
   server.registerTool(
@@ -37,60 +38,63 @@ export function registerPayrollTool(server: McpServer) {
         limit: z.number().optional().default(100).describe('Items per page'),
       },
     },
-    async args => {
-      try {
-        switch (args.action) {
-          case 'list_supplements': {
-            const result = await listPayrollSupplements(args.employee_id, {
-              page: args.page,
-              limit: args.limit,
-            });
-            return textResponse(
-              `Found ${result.data.length} payroll supplements:\n\n${JSON.stringify(result.data, null, 2)}`
-            );
-          }
+    async (args, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        try {
+          switch (args.action) {
+            case 'list_supplements': {
+              const result = await listPayrollSupplements(args.employee_id, {
+                page: args.page,
+                limit: args.limit,
+              });
+              return textResponse(
+                `Found ${result.data.length} payroll supplements:\n\n${JSON.stringify(result.data, null, 2)}`
+              );
+            }
 
-          case 'get_supplement': {
-            if (!args.id) return textResponse('Error: id is required');
-            const supplement = await getPayrollSupplement(args.id);
-            return textResponse(`Payroll supplement:\n\n${JSON.stringify(supplement, null, 2)}`);
-          }
+            case 'get_supplement': {
+              if (!args.id) return textResponse('Error: id is required');
+              const supplement = await getPayrollSupplement(args.id);
+              return textResponse(`Payroll supplement:\n\n${JSON.stringify(supplement, null, 2)}`);
+            }
 
-          case 'list_tax_ids': {
-            const result = await listTaxIdentifiers(args.employee_id, {
-              page: args.page,
-              limit: args.limit,
-            });
-            return textResponse(
-              `Found ${result.data.length} tax identifiers:\n\n${JSON.stringify(result.data, null, 2)}`
-            );
-          }
+            case 'list_tax_ids': {
+              const result = await listTaxIdentifiers(args.employee_id, {
+                page: args.page,
+                limit: args.limit,
+              });
+              return textResponse(
+                `Found ${result.data.length} tax identifiers:\n\n${JSON.stringify(result.data, null, 2)}`
+              );
+            }
 
-          case 'get_tax_id': {
-            if (!args.id) return textResponse('Error: id is required');
-            const taxId = await getTaxIdentifier(args.id);
-            return textResponse(`Tax identifier:\n\n${JSON.stringify(taxId, null, 2)}`);
-          }
+            case 'get_tax_id': {
+              if (!args.id) return textResponse('Error: id is required');
+              const taxId = await getTaxIdentifier(args.id);
+              return textResponse(`Tax identifier:\n\n${JSON.stringify(taxId, null, 2)}`);
+            }
 
-          case 'list_family': {
-            const result = await listFamilySituations(args.employee_id, {
-              page: args.page,
-              limit: args.limit,
-            });
-            return textResponse(
-              `Found ${result.data.length} family situations:\n\n${JSON.stringify(result.data, null, 2)}`
-            );
-          }
+            case 'list_family': {
+              const result = await listFamilySituations(args.employee_id, {
+                page: args.page,
+                limit: args.limit,
+              });
+              return textResponse(
+                `Found ${result.data.length} family situations:\n\n${JSON.stringify(result.data, null, 2)}`
+              );
+            }
 
-          case 'get_family': {
-            if (!args.id) return textResponse('Error: id is required');
-            const family = await getFamilySituation(args.id);
-            return textResponse(`Family situation:\n\n${JSON.stringify(family, null, 2)}`);
+            case 'get_family': {
+              if (!args.id) return textResponse('Error: id is required');
+              const family = await getFamilySituation(args.id);
+              return textResponse(`Family situation:\n\n${JSON.stringify(family, null, 2)}`);
+            }
           }
+        } catch (error) {
+          return formatToolError(error);
         }
-      } catch (error) {
-        return formatToolError(error);
-      }
+      });
     }
   );
 }

@@ -5,6 +5,8 @@
  */
 
 import { getConfig, debug, getApiKey } from './config.js';
+import type { Credentials } from './credentials.js';
+import { getCurrentCredentials } from './credentials.js';
 import {
   AuthenticationError,
   AuthorizationError,
@@ -37,6 +39,8 @@ export interface RequestOptions {
   maxRetries?: number;
   /** Skip retry logic */
   noRetry?: boolean;
+  /** Per-request credentials (falls back to env API key if absent) */
+  credentials?: Credentials;
 }
 
 /**
@@ -182,11 +186,19 @@ export async function factorialRequest<T>(
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      // Build headers
+      // Build headers with appropriate auth — check explicit option, then
+      // AsyncLocalStorage context, then fall back to env API key.
       const headers: Record<string, string> = {
-        'x-api-key': getApiKey(),
         Accept: 'application/json',
       };
+      const creds = options.credentials ?? getCurrentCredentials();
+      if (creds?.mode === 'bearer') {
+        headers['Authorization'] = `Bearer ${creds.accessToken}`;
+      } else if (creds?.mode === 'api-key') {
+        headers['x-api-key'] = creds.apiKey;
+      } else {
+        headers['x-api-key'] = getApiKey();
+      }
 
       // Add Content-Type for requests with body
       if (options.body) {

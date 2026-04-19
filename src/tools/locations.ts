@@ -14,6 +14,7 @@ import {
   updateLocation,
   deleteLocation,
 } from '../api/index.js';
+import { credentialsFromAuthInfo, withCredentials } from '../credentials.js';
 
 export function registerLocationsTool(server: McpServer) {
   server.registerTool(
@@ -37,69 +38,72 @@ export function registerLocationsTool(server: McpServer) {
         confirm: z.boolean().optional().describe('Confirm delete'),
       },
     },
-    async args => {
-      try {
-        switch (args.action) {
-          case 'list': {
-            const result = await listLocations({ page: args.page, limit: args.limit });
-            const summary = result.data.map(l => ({
-              id: l.id,
-              name: l.name,
-              city: l.city,
-              country: l.country,
-            }));
-            return textResponse(
-              `Found ${result.data.length} locations (${formatPaginationInfo(result.meta)}):\n\n${JSON.stringify(summary, null, 2)}`
-            );
-          }
+    async (args, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        try {
+          switch (args.action) {
+            case 'list': {
+              const result = await listLocations({ page: args.page, limit: args.limit });
+              const summary = result.data.map(l => ({
+                id: l.id,
+                name: l.name,
+                city: l.city,
+                country: l.country,
+              }));
+              return textResponse(
+                `Found ${result.data.length} locations (${formatPaginationInfo(result.meta)}):\n\n${JSON.stringify(summary, null, 2)}`
+              );
+            }
 
-          case 'get': {
-            if (!args.id) return textResponse('Error: id is required');
-            const location = await getLocation(args.id);
-            return textResponse(`Location details:\n\n${JSON.stringify(location, null, 2)}`);
-          }
+            case 'get': {
+              if (!args.id) return textResponse('Error: id is required');
+              const location = await getLocation(args.id);
+              return textResponse(`Location details:\n\n${JSON.stringify(location, null, 2)}`);
+            }
 
-          case 'create': {
-            if (!args.name) return textResponse('Error: name is required');
-            const location = await createLocation({
-              name: args.name,
-              address_line_1: args.address_line_1,
-              address_line_2: args.address_line_2,
-              city: args.city,
-              state: args.state,
-              postal_code: args.postal_code,
-              country: args.country,
-              phone_number: args.phone_number,
-            });
-            return textResponse(`Location created:\n\n${JSON.stringify(location, null, 2)}`);
-          }
+            case 'create': {
+              if (!args.name) return textResponse('Error: name is required');
+              const location = await createLocation({
+                name: args.name,
+                address_line_1: args.address_line_1,
+                address_line_2: args.address_line_2,
+                city: args.city,
+                state: args.state,
+                postal_code: args.postal_code,
+                country: args.country,
+                phone_number: args.phone_number,
+              });
+              return textResponse(`Location created:\n\n${JSON.stringify(location, null, 2)}`);
+            }
 
-          case 'update': {
-            if (!args.id) return textResponse('Error: id is required');
-            const location = await updateLocation(args.id, {
-              name: args.name,
-              address_line_1: args.address_line_1,
-              address_line_2: args.address_line_2,
-              city: args.city,
-              state: args.state,
-              postal_code: args.postal_code,
-              country: args.country,
-              phone_number: args.phone_number,
-            });
-            return textResponse(`Location updated:\n\n${JSON.stringify(location, null, 2)}`);
-          }
+            case 'update': {
+              if (!args.id) return textResponse('Error: id is required');
+              const location = await updateLocation(args.id, {
+                name: args.name,
+                address_line_1: args.address_line_1,
+                address_line_2: args.address_line_2,
+                city: args.city,
+                state: args.state,
+                postal_code: args.postal_code,
+                country: args.country,
+                phone_number: args.phone_number,
+              });
+              return textResponse(`Location updated:\n\n${JSON.stringify(location, null, 2)}`);
+            }
 
-          case 'delete': {
-            if (!args.id) return textResponse('Error: id is required');
-            const check = checkConfirmation('delete_location', args.confirm);
-            if (check.needsConfirmation) return textResponse(check.message);
-            await deleteLocation(args.id);
-            return textResponse(`Location ${args.id} deleted successfully.`);
+            case 'delete': {
+              if (!args.id) return textResponse('Error: id is required');
+              const check = checkConfirmation('delete_location', args.confirm);
+              if (check.needsConfirmation) return textResponse(check.message);
+              await deleteLocation(args.id);
+              return textResponse(`Location ${args.id} deleted successfully.`);
+            }
           }
+        } catch (error) {
+          return formatToolError(error);
         }
-      } catch (error) {
-        return formatToolError(error);
-      }
+      });
     }
   );
 }

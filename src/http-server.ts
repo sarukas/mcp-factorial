@@ -1,15 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * MCP Server for FactorialHR — Streamable HTTP transport entry point.
+ * MCP Server for FactorialHR — Streamable HTTP transport with OAuth2.
  *
- * Designed for remote deployment (Kubernetes, Docker, etc.).
- * Each inbound request creates a stateful MCP session backed by a
- * StreamableHTTPServerTransport from the official MCP SDK.
+ * Uses Express with the MCP SDK's auth infrastructure:
+ * - mcpAuthRouter: handles OAuth2 discovery, authorization, and token endpoints
+ * - requireBearerAuth: validates Bearer tokens on /mcp requests
+ * - ProxyOAuthServerProvider: proxies OAuth2 to Factorial's authorization server
+ *
+ * Each authenticated request carries the user's Factorial access token,
+ * which is used for all API calls (per-user permissions).
  *
  * Environment variables:
- *   PORT              — listen port (default 3000)
- *   MCP_HEALTH_PATH   — health endpoint path (default /healthz)
+ *   PORT                          — listen port (default 3000)
+ *   MCP_ISSUER_URL                — public URL of this server (for OAuth metadata)
+ *   FACTORIAL_OAUTH_CLIENT_ID     — Factorial OAuth2 client ID (required)
+ *   FACTORIAL_OAUTH_CLIENT_SECRET — Factorial OAuth2 client secret (required)
  *
  * All standard FACTORIAL_* env vars apply (see .env.example).
  */
@@ -19,113 +25,108 @@ import { loadEnv } from './config.js';
 // Load environment variables before other imports
 loadEnv();
 
-import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'node:http';
+import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { cache } from './cache.js';
 import { createServer } from './server.js';
+import { createFactorialOAuthProvider } from './factorial-oauth-provider.js';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const HEALTH_PATH = process.env.MCP_HEALTH_PATH || '/healthz';
 const MCP_PATH = '/mcp';
+
+// Derive issuer URL from environment or fall back to localhost
+const issuerUrl = new URL(process.env.MCP_ISSUER_URL || `http://localhost:${PORT}`);
+
+// Create OAuth provider that proxies to Factorial
+const oauthProvider = createFactorialOAuthProvider();
 
 // Track active transports for cleanup
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
-async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // Health check — used by Kubernetes liveness/readiness probes
-  if (req.url === HEALTH_PATH) {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
+const app = express();
+
+// Parse JSON bodies (needed for MCP protocol messages)
+app.use(express.json());
+
+// Health check — unauthenticated, used by Kubernetes probes
+app.get('/healthz', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Mount OAuth2 endpoints (/.well-known/*, /authorize, /token, /register)
+app.use(
+  mcpAuthRouter({
+    provider: oauthProvider,
+    issuerUrl,
+  })
+);
+
+// Bearer auth middleware for MCP endpoint
+const bearerAuth = requireBearerAuth({
+  verifier: oauthProvider,
+});
+
+// MCP endpoint — POST (new session or existing session message)
+app.post(MCP_PATH, bearerAuth, async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+  if (sessionId && transports.has(sessionId)) {
+    const transport = transports.get(sessionId)!;
+    await transport.handleRequest(req, res);
     return;
   }
 
-  // Only handle the MCP endpoint
-  if (req.url !== MCP_PATH) {
-    res.writeHead(404);
-    res.end('Not found');
-    return;
-  }
+  if (!sessionId) {
+    // New session
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
 
-  // Parse the request body for POST requests
-  if (req.method === 'POST') {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    let transport: StreamableHTTPServerTransport;
+    const server = createServer();
+    await server.connect(transport);
 
-    if (sessionId && transports.has(sessionId)) {
-      // Reuse existing session
-      transport = transports.get(sessionId)!;
-    } else if (!sessionId) {
-      // New session — create transport and wire up a fresh MCP server
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-      });
-
-      const server = createServer();
-      await server.connect(transport);
-
-      // Track and clean up on close
-      if (transport.sessionId) {
-        transports.set(transport.sessionId, transport);
-      }
-      transport.onclose = () => {
-        if (transport.sessionId) {
-          transports.delete(transport.sessionId);
-        }
-      };
-    } else {
-      // Invalid session ID
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          error: 'Session not found. Start a new session without mcp-session-id header.',
-        })
-      );
-      return;
+    if (transport.sessionId) {
+      transports.set(transport.sessionId, transport);
     }
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        transports.delete(transport.sessionId);
+      }
+    };
 
     await transport.handleRequest(req, res);
     return;
   }
 
-  if (req.method === 'GET') {
-    // GET on /mcp is used for SSE stream in existing sessions
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (sessionId && transports.has(sessionId)) {
-      const transport = transports.get(sessionId)!;
-      await transport.handleRequest(req, res);
-      return;
-    }
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Missing or invalid mcp-session-id header.' }));
-    return;
-  }
-
-  if (req.method === 'DELETE') {
-    // Session termination
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (sessionId && transports.has(sessionId)) {
-      const transport = transports.get(sessionId)!;
-      await transport.handleRequest(req, res);
-      return;
-    }
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Session not found.' }));
-    return;
-  }
-
-  res.writeHead(405);
-  res.end('Method not allowed');
-}
-
-const httpServer = createHttpServer((req, res) => {
-  handleRequest(req, res).catch(err => {
-    console.error('Unhandled request error:', err);
-    if (!res.headersSent) {
-      res.writeHead(500);
-      res.end('Internal server error');
-    }
+  // Invalid session ID
+  res.status(404).json({
+    error: 'Session not found. Start a new session without mcp-session-id header.',
   });
+});
+
+// MCP endpoint — GET (SSE stream for existing session)
+app.get(MCP_PATH, bearerAuth, async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+  if (sessionId && transports.has(sessionId)) {
+    const transport = transports.get(sessionId)!;
+    await transport.handleRequest(req, res);
+    return;
+  }
+  res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
+});
+
+// MCP endpoint — DELETE (session termination)
+app.delete(MCP_PATH, bearerAuth, async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+  if (sessionId && transports.has(sessionId)) {
+    const transport = transports.get(sessionId)!;
+    await transport.handleRequest(req, res);
+    return;
+  }
+  res.status(404).json({ error: 'Session not found.' });
 });
 
 // Graceful shutdown
@@ -136,16 +137,15 @@ function shutdown() {
   }
   transports.clear();
   cache.clear();
-  httpServer.close(() => process.exit(0));
-  // Force exit after 10s if connections don't drain
-  setTimeout(() => process.exit(1), 10_000).unref();
+  process.exit(0);
 }
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-httpServer.listen(PORT, () => {
-  console.error(`Factorial HR MCP server (HTTP) listening on port ${PORT}`);
+app.listen(PORT, () => {
+  console.error(`Factorial HR MCP server (HTTP + OAuth2) listening on port ${PORT}`);
   console.error(`  MCP endpoint: ${MCP_PATH}`);
-  console.error(`  Health check: ${HEALTH_PATH}`);
+  console.error(`  OAuth issuer: ${issuerUrl.href}`);
+  console.error(`  Health check: /healthz`);
 });

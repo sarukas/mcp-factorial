@@ -19,6 +19,7 @@ import {
   approveLeave,
   rejectLeave,
 } from '../api/index.js';
+import { credentialsFromAuthInfo, withCredentials } from '../credentials.js';
 
 export function registerTimeOffTool(server: McpServer) {
   server.registerTool(
@@ -54,117 +55,120 @@ export function registerTimeOffTool(server: McpServer) {
         confirm: z.boolean().optional().describe('Confirm cancel/reject'),
       },
     },
-    async args => {
-      try {
-        switch (args.action) {
-          case 'list_leaves': {
-            const result = await listLeaves({
-              employee_id: args.employee_id,
-              start_on_gte: args.start_on,
-              start_on_lte: args.finish_on,
-              page: args.page,
-              limit: args.limit,
-            });
-            const summary = result.data.map(l => ({
-              id: l.id,
-              employee_id: l.employee_id,
-              leave_type_id: l.leave_type_id,
-              start_on: l.start_on,
-              finish_on: l.finish_on,
-              status: l.status,
-            }));
-            return textResponse(
-              `Found ${result.data.length} leaves (${formatPaginationInfo(result.meta)}):\n\n${JSON.stringify(summary, null, 2)}`
-            );
-          }
-
-          case 'get_leave': {
-            if (!args.id) return textResponse('Error: id is required');
-            const leave = await getLeave(args.id);
-            return textResponse(`Leave details:\n\n${JSON.stringify(leave, null, 2)}`);
-          }
-
-          case 'list_types': {
-            const types = await listLeaveTypes();
-            const summary = types.map(t => ({
-              id: t.id,
-              name: t.name,
-            }));
-            return textResponse(
-              `Found ${types.length} leave types:\n\n${JSON.stringify(summary, null, 2)}`
-            );
-          }
-
-          case 'get_type': {
-            if (!args.id) return textResponse('Error: id is required');
-            const leaveType = await getLeaveType(args.id);
-            return textResponse(`Leave type details:\n\n${JSON.stringify(leaveType, null, 2)}`);
-          }
-
-          case 'list_allowances': {
-            const result = await listAllowances({
-              employee_id: args.employee_id,
-              page: args.page,
-              limit: args.limit,
-            });
-            return textResponse(
-              `Found ${result.data.length} allowances:\n\n${JSON.stringify(result.data, null, 2)}`
-            );
-          }
-
-          case 'create': {
-            if (!args.employee_id || !args.leave_type_id || !args.start_on || !args.finish_on) {
+    async (args, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        try {
+          switch (args.action) {
+            case 'list_leaves': {
+              const result = await listLeaves({
+                employee_id: args.employee_id,
+                start_on_gte: args.start_on,
+                start_on_lte: args.finish_on,
+                page: args.page,
+                limit: args.limit,
+              });
+              const summary = result.data.map(l => ({
+                id: l.id,
+                employee_id: l.employee_id,
+                leave_type_id: l.leave_type_id,
+                start_on: l.start_on,
+                finish_on: l.finish_on,
+                status: l.status,
+              }));
               return textResponse(
-                'Error: employee_id, leave_type_id, start_on, and finish_on are required'
+                `Found ${result.data.length} leaves (${formatPaginationInfo(result.meta)}):\n\n${JSON.stringify(summary, null, 2)}`
               );
             }
-            const leave = await createLeave({
-              employee_id: args.employee_id,
-              leave_type_id: args.leave_type_id,
-              start_on: args.start_on,
-              finish_on: args.finish_on,
-              half_day: args.half_day,
-              description: args.description,
-            });
-            return textResponse(`Leave created:\n\n${JSON.stringify(leave, null, 2)}`);
-          }
 
-          case 'update': {
-            if (!args.id) return textResponse('Error: id is required');
-            const leave = await updateLeave(args.id, {
-              start_on: args.start_on,
-              finish_on: args.finish_on,
-              half_day: args.half_day,
-              description: args.description,
-            });
-            return textResponse(`Leave updated:\n\n${JSON.stringify(leave, null, 2)}`);
-          }
+            case 'get_leave': {
+              if (!args.id) return textResponse('Error: id is required');
+              const leave = await getLeave(args.id);
+              return textResponse(`Leave details:\n\n${JSON.stringify(leave, null, 2)}`);
+            }
 
-          case 'cancel': {
-            if (!args.id) return textResponse('Error: id is required');
-            const check = checkConfirmation('cancel_leave', args.confirm);
-            if (check.needsConfirmation) return textResponse(check.message);
-            await cancelLeave(args.id);
-            return textResponse(`Leave ${args.id} cancelled successfully.`);
-          }
+            case 'list_types': {
+              const types = await listLeaveTypes();
+              const summary = types.map(t => ({
+                id: t.id,
+                name: t.name,
+              }));
+              return textResponse(
+                `Found ${types.length} leave types:\n\n${JSON.stringify(summary, null, 2)}`
+              );
+            }
 
-          case 'approve': {
-            if (!args.id) return textResponse('Error: id is required');
-            const leave = await approveLeave(args.id);
-            return textResponse(`Leave approved:\n\n${JSON.stringify(leave, null, 2)}`);
-          }
+            case 'get_type': {
+              if (!args.id) return textResponse('Error: id is required');
+              const leaveType = await getLeaveType(args.id);
+              return textResponse(`Leave type details:\n\n${JSON.stringify(leaveType, null, 2)}`);
+            }
 
-          case 'reject': {
-            if (!args.id) return textResponse('Error: id is required');
-            const check = checkConfirmation('reject_leave', args.confirm);
-            if (check.needsConfirmation) return textResponse(check.message);
-            const leave = await rejectLeave(args.id);
-            return textResponse(`Leave rejected:\n\n${JSON.stringify(leave, null, 2)}`);
+            case 'list_allowances': {
+              const result = await listAllowances({
+                employee_id: args.employee_id,
+                page: args.page,
+                limit: args.limit,
+              });
+              return textResponse(
+                `Found ${result.data.length} allowances:\n\n${JSON.stringify(result.data, null, 2)}`
+              );
+            }
+
+            case 'create': {
+              if (!args.employee_id || !args.leave_type_id || !args.start_on || !args.finish_on) {
+                return textResponse(
+                  'Error: employee_id, leave_type_id, start_on, and finish_on are required'
+                );
+              }
+              const leave = await createLeave({
+                employee_id: args.employee_id,
+                leave_type_id: args.leave_type_id,
+                start_on: args.start_on,
+                finish_on: args.finish_on,
+                half_day: args.half_day,
+                description: args.description,
+              });
+              return textResponse(`Leave created:\n\n${JSON.stringify(leave, null, 2)}`);
+            }
+
+            case 'update': {
+              if (!args.id) return textResponse('Error: id is required');
+              const leave = await updateLeave(args.id, {
+                start_on: args.start_on,
+                finish_on: args.finish_on,
+                half_day: args.half_day,
+                description: args.description,
+              });
+              return textResponse(`Leave updated:\n\n${JSON.stringify(leave, null, 2)}`);
+            }
+
+            case 'cancel': {
+              if (!args.id) return textResponse('Error: id is required');
+              const check = checkConfirmation('cancel_leave', args.confirm);
+              if (check.needsConfirmation) return textResponse(check.message);
+              await cancelLeave(args.id);
+              return textResponse(`Leave ${args.id} cancelled successfully.`);
+            }
+
+            case 'approve': {
+              if (!args.id) return textResponse('Error: id is required');
+              const leave = await approveLeave(args.id);
+              return textResponse(`Leave approved:\n\n${JSON.stringify(leave, null, 2)}`);
+            }
+
+            case 'reject': {
+              if (!args.id) return textResponse('Error: id is required');
+              const check = checkConfirmation('reject_leave', args.confirm);
+              if (check.needsConfirmation) return textResponse(check.message);
+              const leave = await rejectLeave(args.id);
+              return textResponse(`Leave rejected:\n\n${JSON.stringify(leave, null, 2)}`);
+            }
           }
+        } catch (error) {
+          return formatToolError(error);
         }
-      } catch (error) {
-        return formatToolError(error);
-      }
+      });
     }
   );
 }

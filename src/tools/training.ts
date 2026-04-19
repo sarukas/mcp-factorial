@@ -21,6 +21,7 @@ import {
   enrollInTraining,
   unenrollFromTraining,
 } from '../api/index.js';
+import { credentialsFromAuthInfo, withCredentials } from '../credentials.js';
 
 export function registerTrainingTool(server: McpServer) {
   server.registerTool(
@@ -59,123 +60,126 @@ export function registerTrainingTool(server: McpServer) {
         confirm: z.boolean().optional().describe('Confirm delete'),
       },
     },
-    async args => {
-      try {
-        switch (args.action) {
-          case 'list': {
-            const result = await listTrainings({ page: args.page, limit: args.limit });
-            const summary = result.data.map(t => ({
-              id: t.id,
-              name: t.name,
-            }));
-            return textResponse(
-              `Found ${result.data.length} trainings (${formatPaginationInfo(result.meta)}):\n\n${JSON.stringify(summary, null, 2)}`
-            );
-          }
-
-          case 'get': {
-            if (!args.id) return textResponse('Error: id is required');
-            const training = await getTraining(args.id);
-            return textResponse(`Training details:\n\n${JSON.stringify(training, null, 2)}`);
-          }
-
-          case 'create': {
-            if (!args.name) return textResponse('Error: name is required');
-            const training = await createTraining({
-              name: args.name,
-              description: args.description,
-            });
-            return textResponse(`Training created:\n\n${JSON.stringify(training, null, 2)}`);
-          }
-
-          case 'update': {
-            if (!args.id) return textResponse('Error: id is required');
-            const training = await updateTraining(args.id, {
-              name: args.name,
-              description: args.description,
-            });
-            return textResponse(`Training updated:\n\n${JSON.stringify(training, null, 2)}`);
-          }
-
-          case 'delete': {
-            if (!args.id) return textResponse('Error: id is required');
-            const check = checkConfirmation('delete_training', args.confirm);
-            if (check.needsConfirmation) return textResponse(check.message);
-            await deleteTraining(args.id);
-            return textResponse(`Training ${args.id} deleted successfully.`);
-          }
-
-          case 'list_sessions': {
-            const result = await listTrainingSessions(args.training_id, {
-              page: args.page,
-              limit: args.limit,
-            });
-            return textResponse(
-              `Found ${result.data.length} sessions:\n\n${JSON.stringify(result.data, null, 2)}`
-            );
-          }
-
-          case 'create_session': {
-            if (!args.training_id) {
-              return textResponse('Error: training_id is required');
+    async (args, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        try {
+          switch (args.action) {
+            case 'list': {
+              const result = await listTrainings({ page: args.page, limit: args.limit });
+              const summary = result.data.map(t => ({
+                id: t.id,
+                name: t.name,
+              }));
+              return textResponse(
+                `Found ${result.data.length} trainings (${formatPaginationInfo(result.meta)}):\n\n${JSON.stringify(summary, null, 2)}`
+              );
             }
-            const session = await createTrainingSession({
-              training_id: args.training_id,
-              start_date: args.starts_on,
-              end_date: args.ends_on,
-              location: args.location,
-              max_attendees: args.max_attendees,
-            });
-            return textResponse(`Session created:\n\n${JSON.stringify(session, null, 2)}`);
-          }
 
-          case 'update_session': {
-            if (!args.id) return textResponse('Error: id is required');
-            const session = await updateTrainingSession(args.id, {
-              start_date: args.starts_on,
-              end_date: args.ends_on,
-              location: args.location,
-              max_attendees: args.max_attendees,
-            });
-            return textResponse(`Session updated:\n\n${JSON.stringify(session, null, 2)}`);
-          }
-
-          case 'delete_session': {
-            if (!args.id) return textResponse('Error: id is required');
-            await deleteTrainingSession(args.id);
-            return textResponse(`Session ${args.id} deleted successfully.`);
-          }
-
-          case 'list_enrollments': {
-            const result = await listTrainingEnrollments(args.training_id, {
-              page: args.page,
-              limit: args.limit,
-            });
-            return textResponse(
-              `Found ${result.data.length} enrollments:\n\n${JSON.stringify(result.data, null, 2)}`
-            );
-          }
-
-          case 'enroll': {
-            if (!args.training_id || !args.employee_id) {
-              return textResponse('Error: training_id and employee_id are required');
+            case 'get': {
+              if (!args.id) return textResponse('Error: id is required');
+              const training = await getTraining(args.id);
+              return textResponse(`Training details:\n\n${JSON.stringify(training, null, 2)}`);
             }
-            const enrollment = await enrollInTraining({
-              training_id: args.training_id,
-              employee_id: args.employee_id,
-            });
-            return textResponse(`Enrolled:\n\n${JSON.stringify(enrollment, null, 2)}`);
-          }
 
-          case 'unenroll': {
-            if (!args.id) return textResponse('Error: id (enrollment_id) is required');
-            await unenrollFromTraining(args.id);
-            return textResponse(`Enrollment ${args.id} removed.`);
+            case 'create': {
+              if (!args.name) return textResponse('Error: name is required');
+              const training = await createTraining({
+                name: args.name,
+                description: args.description,
+              });
+              return textResponse(`Training created:\n\n${JSON.stringify(training, null, 2)}`);
+            }
+
+            case 'update': {
+              if (!args.id) return textResponse('Error: id is required');
+              const training = await updateTraining(args.id, {
+                name: args.name,
+                description: args.description,
+              });
+              return textResponse(`Training updated:\n\n${JSON.stringify(training, null, 2)}`);
+            }
+
+            case 'delete': {
+              if (!args.id) return textResponse('Error: id is required');
+              const check = checkConfirmation('delete_training', args.confirm);
+              if (check.needsConfirmation) return textResponse(check.message);
+              await deleteTraining(args.id);
+              return textResponse(`Training ${args.id} deleted successfully.`);
+            }
+
+            case 'list_sessions': {
+              const result = await listTrainingSessions(args.training_id, {
+                page: args.page,
+                limit: args.limit,
+              });
+              return textResponse(
+                `Found ${result.data.length} sessions:\n\n${JSON.stringify(result.data, null, 2)}`
+              );
+            }
+
+            case 'create_session': {
+              if (!args.training_id) {
+                return textResponse('Error: training_id is required');
+              }
+              const session = await createTrainingSession({
+                training_id: args.training_id,
+                start_date: args.starts_on,
+                end_date: args.ends_on,
+                location: args.location,
+                max_attendees: args.max_attendees,
+              });
+              return textResponse(`Session created:\n\n${JSON.stringify(session, null, 2)}`);
+            }
+
+            case 'update_session': {
+              if (!args.id) return textResponse('Error: id is required');
+              const session = await updateTrainingSession(args.id, {
+                start_date: args.starts_on,
+                end_date: args.ends_on,
+                location: args.location,
+                max_attendees: args.max_attendees,
+              });
+              return textResponse(`Session updated:\n\n${JSON.stringify(session, null, 2)}`);
+            }
+
+            case 'delete_session': {
+              if (!args.id) return textResponse('Error: id is required');
+              await deleteTrainingSession(args.id);
+              return textResponse(`Session ${args.id} deleted successfully.`);
+            }
+
+            case 'list_enrollments': {
+              const result = await listTrainingEnrollments(args.training_id, {
+                page: args.page,
+                limit: args.limit,
+              });
+              return textResponse(
+                `Found ${result.data.length} enrollments:\n\n${JSON.stringify(result.data, null, 2)}`
+              );
+            }
+
+            case 'enroll': {
+              if (!args.training_id || !args.employee_id) {
+                return textResponse('Error: training_id and employee_id are required');
+              }
+              const enrollment = await enrollInTraining({
+                training_id: args.training_id,
+                employee_id: args.employee_id,
+              });
+              return textResponse(`Enrolled:\n\n${JSON.stringify(enrollment, null, 2)}`);
+            }
+
+            case 'unenroll': {
+              if (!args.id) return textResponse('Error: id (enrollment_id) is required');
+              await unenrollFromTraining(args.id);
+              return textResponse(`Enrollment ${args.id} removed.`);
+            }
           }
+        } catch (error) {
+          return formatToolError(error);
         }
-      } catch (error) {
-        return formatToolError(error);
-      }
+      });
     }
   );
 }

@@ -13,6 +13,7 @@ import {
   archiveWorkArea,
   unarchiveWorkArea,
 } from '../api/index.js';
+import { credentialsFromAuthInfo, withCredentials } from '../credentials.js';
 
 export function registerWorkAreasTool(server: McpServer) {
   server.registerTool(
@@ -32,69 +33,72 @@ export function registerWorkAreasTool(server: McpServer) {
         limit: z.number().optional().default(100).describe('Items per page'),
       },
     },
-    async args => {
-      try {
-        switch (args.action) {
-          case 'list': {
-            const result = await listWorkAreas({ page: args.page, limit: args.limit });
-            // Filter by location_id client-side if specified
-            let data = result.data;
-            if (args.location_id) {
-              data = data.filter(w => w.location_id === args.location_id);
+    async (args, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        try {
+          switch (args.action) {
+            case 'list': {
+              const result = await listWorkAreas({ page: args.page, limit: args.limit });
+              // Filter by location_id client-side if specified
+              let data = result.data;
+              if (args.location_id) {
+                data = data.filter(w => w.location_id === args.location_id);
+              }
+              const summary = data.map(w => ({
+                id: w.id,
+                name: w.name,
+                location_id: w.location_id,
+                archived: w.archived,
+              }));
+              return textResponse(
+                `Found ${summary.length} work areas:\n\n${JSON.stringify(summary, null, 2)}`
+              );
             }
-            const summary = data.map(w => ({
-              id: w.id,
-              name: w.name,
-              location_id: w.location_id,
-              archived: w.archived,
-            }));
-            return textResponse(
-              `Found ${summary.length} work areas:\n\n${JSON.stringify(summary, null, 2)}`
-            );
-          }
 
-          case 'get': {
-            if (!args.id) return textResponse('Error: id is required');
-            const workArea = await getWorkArea(args.id);
-            return textResponse(`Work area details:\n\n${JSON.stringify(workArea, null, 2)}`);
-          }
-
-          case 'create': {
-            if (!args.location_id || !args.name) {
-              return textResponse('Error: location_id and name are required');
+            case 'get': {
+              if (!args.id) return textResponse('Error: id is required');
+              const workArea = await getWorkArea(args.id);
+              return textResponse(`Work area details:\n\n${JSON.stringify(workArea, null, 2)}`);
             }
-            const workArea = await createWorkArea({
-              location_id: args.location_id,
-              name: args.name,
-              description: args.description,
-            });
-            return textResponse(`Work area created:\n\n${JSON.stringify(workArea, null, 2)}`);
-          }
 
-          case 'update': {
-            if (!args.id) return textResponse('Error: id is required');
-            const workArea = await updateWorkArea(args.id, {
-              name: args.name,
-              description: args.description,
-            });
-            return textResponse(`Work area updated:\n\n${JSON.stringify(workArea, null, 2)}`);
-          }
+            case 'create': {
+              if (!args.location_id || !args.name) {
+                return textResponse('Error: location_id and name are required');
+              }
+              const workArea = await createWorkArea({
+                location_id: args.location_id,
+                name: args.name,
+                description: args.description,
+              });
+              return textResponse(`Work area created:\n\n${JSON.stringify(workArea, null, 2)}`);
+            }
 
-          case 'archive': {
-            if (!args.id) return textResponse('Error: id is required');
-            const workArea = await archiveWorkArea(args.id);
-            return textResponse(`Work area archived:\n\n${JSON.stringify(workArea, null, 2)}`);
-          }
+            case 'update': {
+              if (!args.id) return textResponse('Error: id is required');
+              const workArea = await updateWorkArea(args.id, {
+                name: args.name,
+                description: args.description,
+              });
+              return textResponse(`Work area updated:\n\n${JSON.stringify(workArea, null, 2)}`);
+            }
 
-          case 'unarchive': {
-            if (!args.id) return textResponse('Error: id is required');
-            const workArea = await unarchiveWorkArea(args.id);
-            return textResponse(`Work area unarchived:\n\n${JSON.stringify(workArea, null, 2)}`);
+            case 'archive': {
+              if (!args.id) return textResponse('Error: id is required');
+              const workArea = await archiveWorkArea(args.id);
+              return textResponse(`Work area archived:\n\n${JSON.stringify(workArea, null, 2)}`);
+            }
+
+            case 'unarchive': {
+              if (!args.id) return textResponse('Error: id is required');
+              const workArea = await unarchiveWorkArea(args.id);
+              return textResponse(`Work area unarchived:\n\n${JSON.stringify(workArea, null, 2)}`);
+            }
           }
+        } catch (error) {
+          return formatToolError(error);
         }
-      } catch (error) {
-        return formatToolError(error);
-      }
+      });
     }
   );
 }

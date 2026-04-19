@@ -13,7 +13,7 @@ import { join } from 'path';
  */
 export interface FactorialConfig {
   /** FactorialHR API key (required) */
-  apiKey: string;
+  apiKey: string | undefined;
   /** API version (e.g., '2025-10-01') */
   apiVersion: string;
   /** Base URL for the Factorial API */
@@ -113,7 +113,7 @@ export function getBaseUrl(): string {
  */
 export function getConfig(): FactorialConfig {
   return {
-    apiKey: getApiKey(),
+    apiKey: process.env.FACTORIAL_API_KEY,
     apiVersion: getApiVersion(),
     baseUrl: getBaseUrl(),
     timeout: parseInt(process.env.FACTORIAL_TIMEOUT_MS || String(DEFAULT_TIMEOUT), 10),

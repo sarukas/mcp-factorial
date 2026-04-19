@@ -7,6 +7,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import * as z from 'zod';
 import { textResponse } from './tool-utils.js';
 import { listEmployees, getEmployee, getTeam, listLeaves, listAllowances } from './api/index.js';
+import { credentialsFromAuthInfo, withCredentials } from './credentials.js';
 
 // Tool registration imports
 import { CATEGORIES } from './tools/shared.js';
@@ -93,51 +94,54 @@ export function createServer(): McpServer {
       description: 'View the organizational hierarchy of employees and their managers',
       mimeType: 'application/json',
     },
-    async () => {
-      const result = await listEmployees({ page: 1, limit: 500 });
-      const employees = result.data;
+    async (_uri, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        const result = await listEmployees({ page: 1, limit: 500 });
+        const employees = result.data;
 
-      interface OrgNode {
-        id: number;
-        name: string | null;
-        email: string | null;
-        manager_id: number | null;
-        reports: OrgNode[];
-      }
+        interface OrgNode {
+          id: number;
+          name: string | null;
+          email: string | null;
+          manager_id: number | null;
+          reports: OrgNode[];
+        }
 
-      const buildOrgChart = (): OrgNode[] => {
-        const employeeMap = new Map<number, OrgNode>();
-        employees.forEach(e => {
-          employeeMap.set(e.id, {
-            id: e.id,
-            name: e.full_name,
-            email: e.email,
-            manager_id: e.manager_id,
-            reports: [],
+        const buildOrgChart = (): OrgNode[] => {
+          const employeeMap = new Map<number, OrgNode>();
+          employees.forEach(e => {
+            employeeMap.set(e.id, {
+              id: e.id,
+              name: e.full_name,
+              email: e.email,
+              manager_id: e.manager_id,
+              reports: [],
+            });
           });
-        });
 
-        const roots: OrgNode[] = [];
-        employeeMap.forEach(node => {
-          if (node.manager_id && employeeMap.has(node.manager_id)) {
-            employeeMap.get(node.manager_id)!.reports.push(node);
-          } else {
-            roots.push(node);
-          }
-        });
+          const roots: OrgNode[] = [];
+          employeeMap.forEach(node => {
+            if (node.manager_id && employeeMap.has(node.manager_id)) {
+              employeeMap.get(node.manager_id)!.reports.push(node);
+            } else {
+              roots.push(node);
+            }
+          });
 
-        return roots;
-      };
+          return roots;
+        };
 
-      return {
-        contents: [
-          {
-            uri: 'factorial://org-chart',
-            mimeType: 'application/json',
-            text: JSON.stringify(buildOrgChart(), null, 2),
-          },
-        ],
-      };
+        return {
+          contents: [
+            {
+              uri: 'factorial://org-chart',
+              mimeType: 'application/json',
+              text: JSON.stringify(buildOrgChart(), null, 2),
+            },
+          ],
+        };
+      });
     }
   );
 
@@ -145,33 +149,39 @@ export function createServer(): McpServer {
   server.registerResource(
     'employee_directory',
     new ResourceTemplate('factorial://employees/{id}', {
-      list: async () => {
-        const result = await listEmployees({ page: 1, limit: 100 });
-        return {
-          resources: result.data.map(e => ({
-            name: e.full_name || `Employee ${e.id}`,
-            uri: `factorial://employees/${e.id}`,
-            description: `Employee: ${e.full_name} (${e.email})`,
-            mimeType: 'application/json',
-          })),
-        };
+      list: async extra => {
+        const creds = credentialsFromAuthInfo(extra.authInfo);
+        return withCredentials(creds, async () => {
+          const result = await listEmployees({ page: 1, limit: 100 });
+          return {
+            resources: result.data.map(e => ({
+              name: e.full_name || `Employee ${e.id}`,
+              uri: `factorial://employees/${e.id}`,
+              description: `Employee: ${e.full_name} (${e.email})`,
+              mimeType: 'application/json',
+            })),
+          };
+        });
       },
     }),
     {
       description: 'Get detailed information about an employee',
       mimeType: 'application/json',
     },
-    async (uri, variables) => {
-      const employee = await getEmployee(Number(variables.id));
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: 'application/json',
-            text: JSON.stringify(employee, null, 2),
-          },
-        ],
-      };
+    async (uri, variables, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        const employee = await getEmployee(Number(variables.id));
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify(employee, null, 2),
+            },
+          ],
+        };
+      });
     }
   );
 
@@ -184,22 +194,25 @@ export function createServer(): McpServer {
         team_id: z.string().describe('The team ID to summarize'),
       },
     },
-    async ({ team_id }) => {
-      const team = await getTeam(Number(team_id));
-      const members = team.employee_ids || [];
-      const employeeDetails = await Promise.all(members.map(id => getEmployee(id)));
+    async ({ team_id }, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        const team = await getTeam(Number(team_id));
+        const members = team.employee_ids || [];
+        const employeeDetails = await Promise.all(members.map(id => getEmployee(id)));
 
-      return {
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `Please summarize this team:\n\nTeam: ${team.name}\nDescription: ${team.description || 'N/A'}\nLead IDs: ${team.lead_ids?.join(', ') || 'None'}\n\nMembers (${members.length}):\n${employeeDetails.map(e => `- ${e.full_name} (${e.email})`).join('\n')}`,
+        return {
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Please summarize this team:\n\nTeam: ${team.name}\nDescription: ${team.description || 'N/A'}\nLead IDs: ${team.lead_ids?.join(', ') || 'None'}\n\nMembers (${members.length}):\n${employeeDetails.map(e => `- ${e.full_name} (${e.email})`).join('\n')}`,
+              },
             },
-          },
-        ],
-      };
+          ],
+        };
+      });
     }
   );
 
@@ -211,22 +224,25 @@ export function createServer(): McpServer {
         employee_id: z.string().describe('The employee ID'),
       },
     },
-    async ({ employee_id }) => {
-      const employee = await getEmployee(Number(employee_id));
-      const leaves = await listLeaves({ employee_id: Number(employee_id) });
-      const allowances = await listAllowances({ employee_id: Number(employee_id) });
+    async ({ employee_id }, extra) => {
+      const creds = credentialsFromAuthInfo(extra.authInfo);
+      return withCredentials(creds, async () => {
+        const employee = await getEmployee(Number(employee_id));
+        const leaves = await listLeaves({ employee_id: Number(employee_id) });
+        const allowances = await listAllowances({ employee_id: Number(employee_id) });
 
-      return {
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `Generate a time off report for ${employee.full_name}:\n\nAllowances:\n${JSON.stringify(allowances.data, null, 2)}\n\nRecent Leaves:\n${JSON.stringify(leaves.data.slice(0, 10), null, 2)}`,
+        return {
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Generate a time off report for ${employee.full_name}:\n\nAllowances:\n${JSON.stringify(allowances.data, null, 2)}\n\nRecent Leaves:\n${JSON.stringify(leaves.data.slice(0, 10), null, 2)}`,
+              },
             },
-          },
-        ],
-      };
+          ],
+        };
+      });
     }
   );
 
