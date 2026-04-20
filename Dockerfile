@@ -1,4 +1,4 @@
-FROM node:22-alpine AS builder
+FROM node:22-alpine
 
 WORKDIR /app
 
@@ -9,15 +9,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 
-# --- production image ---
-FROM node:22-alpine
-
-WORKDIR /app
-
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-
-COPY --from=builder /app/dist/ ./dist/
+RUN npm prune --omit=dev
 
 EXPOSE 3000
 

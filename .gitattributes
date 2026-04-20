@@ -1,0 +1,5 @@
+# Force LF line endings for shell / Docker files regardless of OS.
+# Critical: CRLF in Dockerfile RUN commands breaks Linux shell parsing.
+Dockerfile text eol=lf
+*.sh text eol=lf
+.env.example text eol=lf
