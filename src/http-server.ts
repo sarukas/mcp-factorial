@@ -73,6 +73,10 @@ const app = express();
 // refuses to run without this set when X-Forwarded-For is present.
 app.set('trust proxy', 1);
 
+// Suppress the X-Powered-By: Express header — discloses our framework to
+// attackers for no benefit to legitimate clients.
+app.disable('x-powered-by');
+
 // Parse JSON bodies (needed for MCP protocol messages)
 app.use(express.json());
 
