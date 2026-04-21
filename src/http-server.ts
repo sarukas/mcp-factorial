@@ -14,6 +14,9 @@
  * Environment variables:
  *   PORT                          — listen port (default 3000)
  *   MCP_ISSUER_URL                — public URL of this server (for OAuth metadata)
+ *   MCP_ALLOWED_ORIGINS           — comma-separated browser Origins allowed to
+ *                                   hit /mcp. Unset = no check; spec recommends
+ *                                   always setting this for DNS-rebinding defense.
  *   FACTORIAL_OAUTH_CLIENT_ID     — Factorial OAuth2 client ID (required)
  *   FACTORIAL_OAUTH_CLIENT_SECRET — Factorial OAuth2 client secret (required)
  *
@@ -28,7 +31,10 @@ loadEnv();
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import {
+  mcpAuthRouter,
+  getOAuthProtectedResourceMetadataUrl,
+} from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { cache } from './cache.js';
@@ -40,6 +46,19 @@ const MCP_PATH = '/mcp';
 
 // Derive issuer URL from environment or fall back to localhost
 const issuerUrl = new URL(process.env.MCP_ISSUER_URL || `http://localhost:${PORT}`);
+
+// Resource-server URL is the specific MCP endpoint, not the whole origin. This
+// is what RFC 9728 calls the "resource", and it determines the PRM path: for a
+// resource at /mcp the PRM is served at /.well-known/oauth-protected-resource/mcp.
+const resourceServerUrl = new URL(MCP_PATH, issuerUrl);
+const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
+
+// Browser Origins allowed to call /mcp — required by the MCP spec to mitigate
+// DNS-rebinding attacks. Leave unset to skip the check (server-to-server /
+// non-browser callers never send Origin anyway).
+const allowedOrigins = process.env.MCP_ALLOWED_ORIGINS?.split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
 
 // Create OAuth provider that proxies to Factorial
 const oauthProvider = createFactorialOAuthProvider();
@@ -67,31 +86,46 @@ app.use(
   mcpAuthRouter({
     provider: oauthProvider,
     issuerUrl,
+    resourceServerUrl,
   })
 );
 
-// Bearer auth middleware for MCP endpoint
+// Bearer auth middleware for MCP endpoint. resourceMetadataUrl makes the 401
+// WWW-Authenticate header include the resource_metadata parameter required by
+// RFC 9728 §5.1, so clients can discover our PRM from a failed request.
 const bearerAuth = requireBearerAuth({
   verifier: oauthProvider,
+  resourceMetadataUrl,
 });
 
 // MCP endpoint — POST (new session or existing session message)
 app.post(MCP_PATH, bearerAuth, async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-  if (sessionId && transports.has(sessionId)) {
-    const transport = transports.get(sessionId)!;
-    await transport.handleRequest(req, res, req.body);
+  if (sessionId) {
+    if (transports.has(sessionId)) {
+      const transport = transports.get(sessionId)!;
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+    // Spec §Session Management: once a server has terminated (or never knew
+    // about) a session ID, it MUST respond 404 so the client reinitializes.
+    res.status(404).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Session not found' },
+      id: null,
+    });
     return;
   }
 
-  if (!sessionId && isInitializeRequest(req.body)) {
+  if (isInitializeRequest(req.body)) {
     // New session. StreamableHTTPServerTransport assigns sessionId inside
     // handleRequest on the initialize call, so we register the transport via
     // the onsessioninitialized callback rather than reading sessionId before
     // handleRequest (which would always be undefined at that point).
     const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
+      allowedOrigins,
       onsessioninitialized: (newSessionId: string) => {
         transports.set(newSessionId, transport);
       },
@@ -112,7 +146,7 @@ app.post(MCP_PATH, bearerAuth, async (req, res) => {
     return;
   }
 
-  // Any other shape (unknown session id, or non-initialize without a session)
+  // No session id AND not an initialize request: malformed call.
   res.status(400).json({
     jsonrpc: '2.0',
     error: {
@@ -163,5 +197,10 @@ app.listen(PORT, () => {
   console.error(`Factorial HR MCP server (HTTP + OAuth2) listening on port ${PORT}`);
   console.error(`  MCP endpoint: ${MCP_PATH}`);
   console.error(`  OAuth issuer: ${issuerUrl.href}`);
+  console.error(`  Resource: ${resourceServerUrl.href}`);
+  console.error(`  Resource metadata: ${resourceMetadataUrl}`);
+  console.error(
+    `  Allowed origins: ${allowedOrigins?.length ? allowedOrigins.join(', ') : '(any — MCP_ALLOWED_ORIGINS not set)'}`
+  );
   console.error(`  Health check: /healthz`);
 });
