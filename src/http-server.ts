@@ -30,6 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { cache } from './cache.js';
 import { createServer } from './server.js';
 import { createFactorialOAuthProvider } from './factorial-oauth-provider.js';
@@ -80,35 +81,45 @@ app.post(MCP_PATH, bearerAuth, async (req, res) => {
 
   if (sessionId && transports.has(sessionId)) {
     const transport = transports.get(sessionId)!;
-    await transport.handleRequest(req, res);
+    await transport.handleRequest(req, res, req.body);
     return;
   }
 
-  if (!sessionId) {
-    // New session
-    const transport = new StreamableHTTPServerTransport({
+  if (!sessionId && isInitializeRequest(req.body)) {
+    // New session. StreamableHTTPServerTransport assigns sessionId inside
+    // handleRequest on the initialize call, so we register the transport via
+    // the onsessioninitialized callback rather than reading sessionId before
+    // handleRequest (which would always be undefined at that point).
+    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (newSessionId: string) => {
+        transports.set(newSessionId, transport);
+      },
     });
 
-    const server = createServer();
-    await server.connect(transport);
-
-    if (transport.sessionId) {
-      transports.set(transport.sessionId, transport);
-    }
     transport.onclose = () => {
       if (transport.sessionId) {
         transports.delete(transport.sessionId);
       }
     };
 
-    await transport.handleRequest(req, res);
+    const server = createServer();
+    await server.connect(transport);
+
+    // Pass req.body explicitly — express.json() has already consumed the
+    // stream, so the transport cannot re-read it from req.
+    await transport.handleRequest(req, res, req.body);
     return;
   }
 
-  // Invalid session ID
-  res.status(404).json({
-    error: 'Session not found. Start a new session without mcp-session-id header.',
+  // Any other shape (unknown session id, or non-initialize without a session)
+  res.status(400).json({
+    jsonrpc: '2.0',
+    error: {
+      code: -32000,
+      message: 'Bad Request: No valid session ID provided',
+    },
+    id: null,
   });
 });
 
