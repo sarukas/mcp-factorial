@@ -3,6 +3,14 @@
  *
  * Uses the MCP SDK's ProxyOAuthServerProvider to handle the full OAuth2
  * authorization code flow, with Factorial as the upstream authorization server.
+ *
+ * Dynamic Client Registration (RFC 7591) is supported locally: Factorial has
+ * no DCR endpoint, so the /register endpoint here accepts any metadata and
+ * returns the configured Factorial client_id/client_secret to every caller.
+ * Each registered redirect_uri is remembered so the authorize handler's
+ * validation passes; Factorial itself still enforces its own redirect_uri
+ * whitelist at the upstream, so MCP client callback URLs must be registered
+ * with the Factorial OAuth app.
  */
 
 import { ProxyOAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/providers/proxyProvider.js';
@@ -29,16 +37,24 @@ export function createFactorialOAuthProvider(): ProxyOAuthServerProvider {
     );
   }
 
-  return new ProxyOAuthServerProvider({
+  const registeredRedirectUris = new Set<string>();
+
+  const buildClientInfo = (): OAuthClientInformationFull => ({
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uris: [...registeredRedirectUris],
+    client_name: 'Factorial HR MCP Server',
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'client_secret_post',
+  });
+
+  const provider = new ProxyOAuthServerProvider({
     endpoints: {
       authorizationUrl: FACTORIAL_AUTHORIZE_URL,
       tokenUrl: FACTORIAL_TOKEN_URL,
     },
 
-    /**
-     * Verify an access token by calling Factorial's API.
-     * If the token is valid, Factorial returns user info; otherwise 401.
-     */
     verifyAccessToken: async (token: string): Promise<AuthInfo> => {
       debug('Verifying access token against Factorial API');
 
@@ -64,24 +80,45 @@ export function createFactorialOAuthProvider(): ProxyOAuthServerProvider {
       };
     },
 
-    /**
-     * Return client information for the configured OAuth application.
-     * Since we have a single Factorial OAuth app, we just return its info.
-     */
     getClient: (requestedClientId: string): Promise<OAuthClientInformationFull | undefined> => {
       if (requestedClientId !== clientId) {
         return Promise.resolve(undefined);
       }
-
-      return Promise.resolve({
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uris: [],
-        client_name: 'Factorial HR MCP Server',
-        grant_types: ['authorization_code', 'refresh_token'],
-        response_types: ['code'],
-        token_endpoint_auth_method: 'client_secret_post',
-      });
+      return Promise.resolve(buildClientInfo());
     },
   });
+
+  // ProxyOAuthServerProvider only exposes clientsStore.registerClient when an
+  // upstream registrationUrl is configured. Factorial has none, so we replace
+  // the getter with a local DCR implementation that hands back the configured
+  // Factorial credentials and records the client's redirect_uris.
+  Object.defineProperty(provider, 'clientsStore', {
+    configurable: true,
+    get() {
+      return {
+        getClient: (requestedClientId: string): Promise<OAuthClientInformationFull | undefined> => {
+          if (requestedClientId !== clientId) return Promise.resolve(undefined);
+          return Promise.resolve(buildClientInfo());
+        },
+        registerClient: (
+          client: OAuthClientInformationFull
+        ): Promise<OAuthClientInformationFull> => {
+          for (const uri of client.redirect_uris ?? []) {
+            registeredRedirectUris.add(uri);
+          }
+          debug(`DCR: registered redirect_uris=${JSON.stringify(client.redirect_uris)}`);
+          return Promise.resolve({
+            ...client,
+            client_id: clientId,
+            client_secret: clientSecret,
+            client_id_issued_at: Math.floor(Date.now() / 1000),
+            client_secret_expires_at: 0,
+            token_endpoint_auth_method: 'client_secret_post',
+          });
+        },
+      };
+    },
+  });
+
+  return provider;
 }
