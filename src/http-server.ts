@@ -48,6 +48,11 @@ const transports = new Map<string, StreamableHTTPServerTransport>();
 
 const app = express();
 
+// Trust the single upstream proxy (Railway, Fly, Heroku, K8s ingress, etc.)
+// so req.ip reflects the real client from X-Forwarded-For. express-rate-limit
+// refuses to run without this set when X-Forwarded-For is present.
+app.set('trust proxy', 1);
+
 // Parse JSON bodies (needed for MCP protocol messages)
 app.use(express.json());
 
